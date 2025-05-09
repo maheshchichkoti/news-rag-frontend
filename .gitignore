@@ -7,10 +7,17 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependency directories
 node_modules
+
+# Build output
 dist
 dist-ssr
-*.local
+
+# Local environment variables
+*.local # Catches .env.local, .env.development.local etc.
+# If you specifically use just ".env" for frontend Vite, add:
+# .env 
 
 # Editor directories and files
 .vscode/*

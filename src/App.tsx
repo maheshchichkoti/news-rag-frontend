@@ -1,6 +1,6 @@
 // src/App.tsx
 import "./App.css";
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { FormEvent } from "react";
 import type { ChatMessage as ChatMessageType } from "./services/api";
 
