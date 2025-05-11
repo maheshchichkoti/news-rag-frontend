@@ -2,7 +2,7 @@
 import "./App.css";
 import { useState, useEffect, useRef } from "react";
 import type { FormEvent } from "react";
-import type { ChatMessage as ChatMessageType } from "./services/api"; // Assuming your api.ts defines this
+import type { ChatMessage as ChatMessageType } from "./services/api";
 
 import {
   getNewSession,
@@ -23,38 +23,60 @@ interface DisplayMessage extends ChatMessageType {
 }
 
 const App = () => {
-  const [sessionId, setSessionId] = useState<string | null>(
-    localStorage.getItem("chat_session_id")
-  );
+  const [sessionId, setSessionId] = useState<string | null>(() => {
+    // Initialize from localStorage sync to avoid flicker
+    const savedSid = localStorage.getItem("chat_session_id");
+    console.log("Initial sessionId from localStorage:", savedSid);
+    return savedSid;
+  });
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
-  // currentAssistantMessage is not strictly needed for non-streaming but kept for TypingIndicator logic
-  const [currentAssistantMessage, setCurrentAssistantMessage] = useState("");
   const [userInput, setUserInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isInitializing, setIsInitializing] = useState(true);
+  const [isInitializing, setIsInitializing] = useState(true); // Start as true
   const [error, setError] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [darkMode, setDarkMode] = useState(
-    localStorage.getItem("darkMode") === "true" ||
-      window.matchMedia("(prefers-color-scheme: dark)").matches
-  );
+  const [darkMode, setDarkMode] = useState(() => {
+    const savedMode = localStorage.getItem("darkMode");
+    return (
+      savedMode === "true" ||
+      (!savedMode && window.matchMedia("(prefers-color-scheme: dark)").matches)
+    );
+  });
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const isMounted = useRef(true); // To prevent state updates on unmounted component
 
   useEffect(() => {
+    return () => {
+      isMounted.current = false; // Set to false when component unmounts
+    };
+  }, []);
+
+  useEffect(() => {
+    console.log("Dark mode effect: ", darkMode);
     document.documentElement.classList.toggle("dark", darkMode);
     localStorage.setItem("darkMode", darkMode.toString());
   }, [darkMode]);
 
   useEffect(() => {
+    console.log(
+      "SessionID changed or component mounted. Current SessionId:",
+      sessionId
+    );
     const initializeSession = async () => {
+      if (!isMounted.current) return;
       setIsInitializing(true);
       setError(null);
+      console.log("Initializing session. Current stored sessionId:", sessionId);
+
       try {
-        let currentSid = sessionId;
+        let currentSid = sessionId; // Use the state variable
         if (!currentSid) {
+          console.log("No current session ID found, fetching new session...");
           const newSessionData = await getNewSession();
+          if (!isMounted.current) return;
           currentSid = newSessionData.session_id;
+          console.log("New session created:", currentSid);
           setSessionId(currentSid);
           localStorage.setItem("chat_session_id", currentSid);
           setMessages([
@@ -67,50 +89,64 @@ const App = () => {
             },
           ]);
         } else {
+          console.log(`Fetching chat history for session ID: ${currentSid}...`);
           const historyData = await getChatHistory(currentSid);
+          if (!isMounted.current) return;
           const history = historyData.history;
+          console.log("Fetched history:", history);
           setMessages(
             history.length === 0
               ? [
                   {
-                    id: `welcome-${Date.now()}`,
+                    id: `welcome-empty-hist-${Date.now()}`,
                     role: "assistant",
                     content:
-                      "Welcome to NewsChat! Ask me anything about recent news articles.",
+                      "Welcome back! Ask me anything about recent news articles.",
                     timestamp: Date.now(),
                   },
                 ]
               : history.map((msg, index) => ({
                   ...msg,
                   id: `hist-${index}-${Date.now()}`,
-                  timestamp: Date.now() - (history.length - index) * 60000, // Simple timestamp offset
+                  timestamp: Date.now() - (history.length - index) * 1000, // Shorter offset for testing
                 }))
           );
         }
       } catch (err) {
         console.error("Session initialization error:", err);
+        if (!isMounted.current) return;
         const errorMessage =
           err instanceof Error ? err.message : "Failed to initialize session.";
         setError(errorMessage);
-        localStorage.removeItem("chat_session_id");
-        setSessionId(null);
+        localStorage.removeItem("chat_session_id"); // Important to clear inconsistent state
+        setSessionId(null); // This should trigger re-initialization
       } finally {
-        setIsInitializing(false);
+        if (isMounted.current) setIsInitializing(false);
+        console.log("Session initialization finished.");
       }
     };
 
     initializeSession();
-  }, [sessionId]); // Re-run if sessionId changes (e.g., after reset)
+  }, [sessionId]); // Trigger ONLY when sessionId changes.
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]); // Removed currentAssistantMessage as it's not streaming character by character
+    if (messages.length > 0) {
+      // Only scroll if there are messages
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
 
   const toggleDarkMode = () => setDarkMode((prev) => !prev);
 
   const handleSendMessage = async (e: FormEvent) => {
     e.preventDefault();
-    if (!userInput.trim() || !sessionId || isLoading) return;
+    console.log("handleSendMessage triggered.");
+    if (!userInput.trim() || !sessionId || isLoading) {
+      console.log(
+        "handleSendMessage: Aborting - input empty, no session, or already loading."
+      );
+      return;
+    }
 
     setShowResetConfirm(false);
     const newUserMessage: DisplayMessage = {
@@ -120,35 +156,39 @@ const App = () => {
       timestamp: Date.now(),
     };
 
+    // Optimistically update UI
     setMessages((prev) => [...prev, newUserMessage]);
+    const currentInput = userInput.trim(); // Capture before clearing
     setUserInput("");
     setIsLoading(true);
-    setCurrentAssistantMessage("typing..."); // To show typing indicator
+    // setCurrentAssistantMessage("typing..."); // Replaced by <TypingIndicator /> based on isLoading
     setError(null);
+    console.log("User message added to UI, calling API...");
 
     try {
-      const fetchResponse = await fetch(
-        `${import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"}/chat`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Session-Id": sessionId,
-          },
-          body: JSON.stringify({ query: newUserMessage.content }),
-        }
-      );
+      const apiUrl = `${
+        import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
+      }/chat`;
+      console.log("Fetching from API:", apiUrl, "with query:", currentInput);
 
-      // Clear typing indicator as soon as we start processing response
-      setCurrentAssistantMessage("");
+      const fetchResponse = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-Id": sessionId,
+        },
+        body: JSON.stringify({ query: currentInput }), // Use captured currentInput
+      });
+
+      console.log("API response status:", fetchResponse.status);
 
       if (!fetchResponse.ok) {
         let errorDetail = `HTTP error! status: ${fetchResponse.status}`;
         try {
           const errData = await fetchResponse.json();
-          errorDetail = errData.detail || errData.error || errorDetail; // Prioritize backend's error message
+          console.error("API error response data:", errData);
+          errorDetail = errData.detail || errData.error || errorDetail;
         } catch (jsonParseError) {
-          // If error response is not JSON, use the status text or default message
           errorDetail = fetchResponse.statusText || errorDetail;
           console.warn(
             "Could not parse error response as JSON:",
@@ -158,10 +198,11 @@ const App = () => {
         throw new Error(errorDetail);
       }
 
-      // --- THIS IS THE MODIFIED PART FOR NON-STREAMING ---
       const responseData = await fetchResponse.json();
+      console.log("Frontend received API responseData:", responseData);
 
       if (responseData && typeof responseData.response === "string") {
+        if (!isMounted.current) return;
         setMessages((prev) => [
           ...prev,
           {
@@ -171,6 +212,7 @@ const App = () => {
             timestamp: Date.now(),
           },
         ]);
+        console.log("Assistant message added to UI.");
       } else {
         console.error(
           "Unexpected response structure from /chat endpoint:",
@@ -178,16 +220,14 @@ const App = () => {
         );
         throw new Error("Received an invalid response format from the server.");
       }
-      // --- END OF MODIFICATION ---
     } catch (err) {
       console.error("Sending message failed:", err);
+      if (!isMounted.current) return;
       const errorMessage =
-        err instanceof Error
-          ? err.message
-          : "An unknown error occurred while sending the message.";
+        err instanceof Error ? err.message : "An unknown error occurred.";
       setError(errorMessage);
-      // Optionally add the error message to the chat display as an assistant message
       setMessages((prev) => [
+        // Optionally add error to chat
         ...prev,
         {
           id: `err-${Date.now()}`,
@@ -197,32 +237,43 @@ const App = () => {
         },
       ]);
     } finally {
-      setIsLoading(false);
-      setCurrentAssistantMessage(""); // Ensure typing indicator is cleared
+      if (isMounted.current) setIsLoading(false);
+      // setCurrentAssistantMessage(""); // Not needed as TypingIndicator handles this
+      console.log("handleSendMessage finished.");
     }
   };
 
   const handleResetSession = async () => {
-    if (!sessionId || isInitializing) return; // Prevent reset if no session or still initializing
+    console.log("handleResetSession triggered.");
+    if (!sessionId || isInitializing) return;
     setIsLoading(true);
     setError(null);
     setShowResetConfirm(false);
 
     try {
-      await clearChatHistory(sessionId); // API call to clear server-side history
-      localStorage.removeItem("chat_session_id"); // Clear local storage
-      setSessionId(null); // This will trigger the useEffect for initialization to create a new session
-      setMessages([]); // Clear messages locally immediately
-      setCurrentAssistantMessage("");
+      await clearChatHistory(sessionId);
+      console.log("Server history cleared for session:", sessionId);
+      localStorage.removeItem("chat_session_id");
+      console.log("Local session ID cleared.");
+      if (isMounted.current) {
+        setSessionId(null); // This will trigger the initializeSession useEffect
+        // setMessages([]); // initializeSession will set welcome message
+      }
     } catch (err) {
       console.error("Reset session error:", err);
-      const errorMessage =
-        err instanceof Error ? err.message : "Failed to reset session.";
-      setError(errorMessage);
+      if (isMounted.current) {
+        const errorMessage =
+          err instanceof Error ? err.message : "Failed to reset session.";
+        setError(errorMessage);
+      }
     } finally {
-      setIsLoading(false);
+      if (isMounted.current) setIsLoading(false);
+      console.log("handleResetSession finished.");
     }
   };
+
+  // Conditional rendering for TypingIndicator
+  const showTypingIndicator = isLoading; // Simpler: show if isLoading is true
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100 transition-colors duration-200">
@@ -251,11 +302,7 @@ const App = () => {
                   timestamp={msg.timestamp}
                 />
               ))}
-              {/*
-                The currentAssistantMessage logic was for character-by-character streaming.
-                For non-streaming, we use a simpler TypingIndicator.
-              */}
-              {isLoading && <TypingIndicator />}
+              {showTypingIndicator && <TypingIndicator />}
             </>
           )}
           <div ref={chatEndRef} />
@@ -264,8 +311,7 @@ const App = () => {
 
       {error && (
         <div className="p-4 bg-red-600 dark:bg-red-800 text-white text-center">
-          <p className="font-semibold">Error Display</p>{" "}
-          {/* Changed title for clarity */}
+          <p className="font-semibold">Error Display</p>
           <p className="text-sm">{error}</p>
         </div>
       )}
