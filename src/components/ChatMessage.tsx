@@ -1,4 +1,3 @@
-// src/components/ChatMessage.tsx
 import React from "react";
 import { FiMessageSquare, FiUser } from "react-icons/fi";
 
@@ -6,6 +5,7 @@ interface ChatMessageProps {
   role: "user" | "assistant";
   content: string;
   timestamp?: number;
+  sources?: { source: string; url?: string; relevance_score?: number }[];
 }
 
 // Format timestamp
@@ -18,6 +18,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   role,
   content,
   timestamp,
+  sources,
 }) => {
   const isUser = role === "user";
 
@@ -59,6 +60,33 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
           `}
         >
           <p className="whitespace-pre-wrap message-text">{content}</p>
+
+          {/* Render sources if present and it's an assistant message */}
+          {!isUser && sources && sources.length > 0 && (
+            <div className="mt-2 text-xs text-blue-600 dark:text-blue-400">
+              <p className="font-semibold">Sources:</p>
+              <ul className="list-disc ml-4">
+                {sources.map((s, i) => (
+                  <li key={i}>
+                    {s.url ? (
+                      <a
+                        href={s.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline hover:text-blue-800 dark:hover:text-blue-200"
+                      >
+                        {s.source}
+                      </a>
+                    ) : (
+                      <span>{s.source}</span>
+                    )}
+                    {s.relevance_score !== undefined &&
+                      ` (score: ${s.relevance_score})`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Timestamp */}
           {timestamp && (
